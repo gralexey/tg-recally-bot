@@ -79,13 +79,10 @@ func schedule(text string, id int, db *gorm.DB) bool {
 
 func scheduleTimer(bot *tgbotapi.BotAPI, db *gorm.DB) {
 	ticker := time.NewTicker(60 * time.Second)
-	done := make(chan bool)
 
 	go func() {
 		for {
 			select {
-			case <-done:
-				return
 			case <-ticker.C:
 				getAllDueAndFire(bot, db)
 			}
@@ -205,7 +202,6 @@ func main() {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Send me a text to memorize 😎")
 				bot.Send(msg)
 				fmt.Println("started")
-				continue
 
 			default:
 				text := "Scheduled!"
@@ -215,7 +211,6 @@ func main() {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, text)
 				bot.Send(msg)
 				fmt.Println("planned ", text)
-				continue
 			}
 		}
 	}
