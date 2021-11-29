@@ -19,11 +19,12 @@ var (
 )
 
 type TimersUsers struct {
-	Id       int
-	ChatId   int
-	Text     string
-	Time     int64
-	Interval int
+	Id         int
+	ChatId     int
+	Text       string
+	Time       int64
+	Interval   int
+	LastMemoId int
 }
 
 type Chat struct {
@@ -65,24 +66,40 @@ func recordStats(tgMessage *tgbotapi.Message, db *gorm.DB) {
 	}
 }
 
-func schedule(text string, id int, db *gorm.DB) bool {
+func setLastMemoId(lastMemoId int, id int, db *gorm.DB) {
+	item := TimersUsers{}
+	res := db.Find(&item, id)
+	if res.RowsAffected == 1 {
+		item.LastMemoId = lastMemoId
+		db.Save(&item)
+	}
+}
+
+func schedule(text string, chatId int, db *gorm.DB) int {
 	now := time.Now().Add(time.Second * time.Duration(3)).Unix()
 	item := TimersUsers{
-		ChatId:   id,
+		ChatId:   chatId,
 		Text:     text,
 		Time:     now,
 		Interval: 1,
 	}
 	res := db.Create(&item)
-	return (res.RowsAffected == 1)
+	if res.RowsAffected == 1 {
+		return item.Id
+	} else {
+		return -1
+	}
 }
 
 func scheduleTimer(bot *tgbotapi.BotAPI, db *gorm.DB) {
 	ticker := time.NewTicker(60 * time.Second)
+	done := make(chan bool)
 
 	go func() {
 		for {
 			select {
+			case <-done:
+				return
 			case <-ticker.C:
 				getAllDueAndFire(bot, db)
 			}
@@ -104,7 +121,12 @@ func getAllDueAndFire(bot *tgbotapi.BotAPI, db *gorm.DB) {
 				tgbotapi.NewInlineKeyboardButtonData("Cancel", fmt.Sprint(item.Id)),
 			),
 		)
-		_, err := bot.Send(msg)
+
+		if item.LastMemoId > 0 {
+			bot.DeleteMessage(tgbotapi.DeleteMessageConfig{ChatID: int64(item.ChatId), MessageID: item.LastMemoId})
+		}
+
+		sentMsg, err := bot.Send(msg)
 		if err == nil {
 			nextInterval := nextInt(item.Interval)
 			if nextInterval == -1 {
@@ -112,6 +134,7 @@ func getAllDueAndFire(bot *tgbotapi.BotAPI, db *gorm.DB) {
 			} else {
 				item.Time = time.Now().Add(time.Minute * time.Duration(nextInterval)).Unix()
 				item.Interval = nextInterval
+				item.LastMemoId = sentMsg.MessageID
 			}
 			db.Save(&item)
 		}
@@ -119,21 +142,35 @@ func getAllDueAndFire(bot *tgbotapi.BotAPI, db *gorm.DB) {
 }
 
 func nextInt(curInt int) int {
+	hour := 60
+	eightHours := 8 * hour
+	day := 24 * hour
+	twoDays := 2 * day
+	week := 7 * day
+	sixteenDays := 16 * day
+	thitryFiveDays := 35 * day
+
 	switch curInt {
 	case 0:
-		return 1
-	case 1:
+		return 2
+	case 2:
 		return 5
 	case 5:
 		return 20
 	case 20:
 		return 60
 	case 60:
-		return 8 * 60
-	case 8 * 60:
-		return 24 * 60
-	case 24 * 60:
-		return 48 * 60
+		return eightHours
+	case eightHours:
+		return day
+	case day:
+		return twoDays
+	case twoDays:
+		return week
+	case week:
+		return sixteenDays
+	case sixteenDays:
+		return thitryFiveDays
 	default:
 		return -1
 	}
@@ -168,9 +205,12 @@ func main() {
 		panic("failed to connect database")
 	}
 
+	createTablesIfNeeeded(db)
+
 	scheduleTimer(bot, db)
 
 	fmt.Print("listening to updates...")
+
 	for update := range updates {
 		if update.CallbackQuery != nil {
 			bot.AnswerCallbackQuery(tgbotapi.NewCallback(update.CallbackQuery.ID, update.CallbackQuery.Data))
@@ -186,7 +226,7 @@ func main() {
 			if res.RowsAffected == 1 {
 				item.Time = 0
 				db.Save(&item)
-				text = "Canceled"
+				text = fmt.Sprintf("\"%s\" canceled", item.Text)
 			} else {
 				text = "Error"
 			}
@@ -202,16 +242,59 @@ func main() {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Send me a text to memorize 😎")
 				bot.Send(msg)
 				fmt.Println("started")
+				continue
 
 			default:
-				text := "Scheduled!"
-				if !schedule(update.Message.Text, int(update.Message.Chat.ID), db) {
+				text := fmt.Sprintf("\"%s\" scheduled!", update.Message.Text)
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, text)
+				scheduledId := schedule(update.Message.Text, int(update.Message.Chat.ID), db)
+				if scheduledId < 0 {
 					text = "Error happened"
 				}
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, text)
-				bot.Send(msg)
+
+				msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+					tgbotapi.NewInlineKeyboardRow(
+						tgbotapi.NewInlineKeyboardButtonData("Cancel", fmt.Sprint(scheduledId)),
+					),
+				)
+
+				sentMessage, err := bot.Send(msg)
+				if err == nil {
+					setLastMemoId(sentMessage.MessageID, scheduledId, db)
+				}
 				fmt.Println("planned ", text)
+				continue
 			}
 		}
+	}
+}
+
+func createTablesIfNeeeded(db *gorm.DB) {
+	res1 := db.Exec(`CREATE TABLE timers_users (
+		id SERIAL PRIMARY KEY,
+		text text,
+		interval integer,
+		time integer,
+		chat_id integer,
+		last_memo_id integer
+	);`)
+
+	if res1.Error != nil {
+		fmt.Println(res1.Error)
+	}
+
+	res2 := db.Exec(`CREATE TABLE timers_chats (
+		id integer PRIMARY KEY,
+		username character varying(32),
+		firstname character varying(32),
+		lastname character varying(32),
+		isbot boolean,
+		messages_count integer,
+		title text,
+		type character varying(16)
+	);`)
+
+	if res2.Error != nil {
+		fmt.Println(res2.Error)
 	}
 }
