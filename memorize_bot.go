@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	botToken   = os.Getenv("TIMER_BOT_TOKEN")
-	dbHost     = os.Getenv("TIMER_DB_HOST")
-	dbPassword = os.Getenv("TIMER_DB_PASSWORD")
+	botToken        = os.Getenv("TIMER_BOT_TOKEN")
+	dbHost          = os.Getenv("TIMER_DB_HOST")
+	dbPassword      = os.Getenv("TIMER_DB_PASSWORD")
+	initialInterval = 2
 )
 
 type TimersUsers struct {
@@ -81,7 +82,7 @@ func schedule(text string, chatId int, db *gorm.DB) int {
 		ChatId:   chatId,
 		Text:     text,
 		Time:     now,
-		Interval: 1,
+		Interval: initialInterval,
 	}
 	res := db.Create(&item)
 	if res.RowsAffected == 1 {
@@ -152,8 +153,8 @@ func nextInt(curInt int) int {
 
 	switch curInt {
 	case 0:
-		return 2
-	case 2:
+		return initialInterval
+	case initialInterval:
 		return 5
 	case 5:
 		return 20
@@ -229,6 +230,10 @@ func main() {
 				text = fmt.Sprintf("\"%s\" canceled", item.Text)
 			} else {
 				text = "Error"
+			}
+
+			if item.LastMemoId > 0 {
+				bot.DeleteMessage(tgbotapi.DeleteMessageConfig{ChatID: int64(item.ChatId), MessageID: item.LastMemoId})
 			}
 
 			msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, text)
