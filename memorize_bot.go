@@ -28,7 +28,7 @@ type TimersUsers struct {
 	LastMemoId int
 }
 
-type Chat struct {
+type TimersChat struct {
 	Id            int64
 	Username      string
 	Firstname     string
@@ -39,7 +39,7 @@ type Chat struct {
 }
 
 func recordStats(tgMessage *tgbotapi.Message, db *gorm.DB) {
-	chat := Chat{}
+	chat := TimersChat{}
 
 	id := tgMessage.Chat.ID
 
@@ -51,7 +51,7 @@ func recordStats(tgMessage *tgbotapi.Message, db *gorm.DB) {
 
 	} else {
 		tgChat := tgMessage.Chat
-		chat := Chat{Id: tgChat.ID,
+		chat := TimersChat{Id: tgChat.ID,
 			Username:      tgChat.UserName,
 			Firstname:     tgChat.FirstName,
 			Lastname:      tgChat.LastName,
